@@ -1,0 +1,6 @@
+git init    					### Initializes a git repo
+git add .   					### This stages your work to be committed, after you edit files
+git commit -m "Your commit message here"   	### This saves your work at that point
+git status   					### Tells you the status of your files
+git log   					### Gives you a log of your commits (Use Q to exit the log)
+git diff   					### Use before git add to see changes you're about to save
