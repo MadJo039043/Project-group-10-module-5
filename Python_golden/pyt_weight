@@ -1,0 +1,89 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import datasets, transforms
+import numpy as np
+
+# converts grey scale to 1D vector
+transform = transforms.Compose([
+    transforms.ToTensor(),                      # shape is (1,28,28)
+    transforms.Lambda(lambda x: x.view(-1))     # flattens tensor shape to 1D
+])
+
+# gets dataset of MNIST digits, training images, test images
+train_ds = datasets.MNIST(root="./data", train=True, download=True, transform=transform)
+test_ds  = datasets.MNIST(root="./data", train=False, transform=transform)
+
+# batch sizes 128 ~ 256 for speed and stable results
+train_loader = torch.utils.data.DataLoader(train_ds, batch_size=128, shuffle=True)
+test_loader  = torch.utils.data.DataLoader(test_ds, batch_size=256, shuffle=False)
+
+# creates fully connected layer
+model = nn.Linear(784, 10, bias=True)
+
+# type of loss function
+loss_fn = nn.CrossEntropyLoss()
+
+# update weights
+opt = optim.Adam(model.parameters(), lr=1e-3)
+
+for epoch in range(6):
+    model.train()
+    for x, t in train_loader:
+        opt.zero_grad()
+        y = model(x)
+        loss = loss_fn(y, t)
+        loss.backward()
+        opt.step()
+    print(f"Epoch {epoch+1}: loss={loss.item():.4f}")
+
+# evaluate accuracy
+model.eval()
+correct, total = 0, 0
+with torch.no_grad():
+    for x, t in test_loader:
+        y = model(x)
+        preds = y.argmax(dim=1)
+        correct += (preds == t).sum().item()
+        total += t.size(0)
+acc = 100 * correct / total
+print(f"Test Accuracy: {acc:.2f}%")
+
+# extract trained weights and biases
+W = model.weight.detach().cpu().numpy()
+b = model.bias.detach().cpu().numpy()
+
+# ===========================================================
+# QUANTIZATION SECTION
+# ===========================================================
+scale_W = np.max(np.abs(W))    # largest absolute value among weights
+scale_X = 255.0                # scale for 8-bit inputs (0–255)
+
+# quantize weights and biases
+W_q = np.round(W / scale_W * 127).astype(np.int8)
+b_q = np.round(b / (scale_W * scale_X) * 127).astype(np.int16)
+
+# save quantized files as .npy
+np.save("W_q.npy", W_q)
+np.save("b_q.npy", b_q)
+
+# also save as .txt
+np.savetxt("W_q.txt", W_q, fmt="%d")
+np.savetxt("b_q.txt", b_q, fmt="%d")
+
+# ===========================================================
+# QUANTIZE INPUT IMAGE (X)
+# ===========================================================
+x, label = test_ds[0]                   # get image and label
+X_float = x.numpy()                     # (784,)
+X_q = np.round(X_float * scale_X).astype(np.uint8)
+
+# save quantized input
+np.save("X_q.npy", X_q)
+np.savetxt("X_q.txt", X_q, fmt="%d")
+
+print("Saved quantized files:")
+print("  - W_q.npy / W_q.txt")
+print("  - b_q.npy / b_q.txt")
+print("  - X_q.npy / X_q.txt")
+print(f"Quantized input corresponds to label: {label}")
