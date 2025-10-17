@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 module RAM24 #(
   parameter address_parameter = 12,  //1960 words-weights, 196 words- image 
-  parameter hexcode = "data.hex"   // initialize the hexcode into Vivado 
+  parameter hexcode = "data.mem"   // initialize the hexcode into Vivado 
 )
 (
   input              clk,

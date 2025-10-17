@@ -3,8 +3,8 @@
 module cpu24 #(
   parameter INSTR_AW  = 10,
   parameter DATA_AW   = 12,
-  parameter INSTR_HEX = "program.hex",
-  parameter DATA_HEX  = "data.hex"
+  parameter INSTR_HEX = "program.mem",
+  parameter DATA_HEX  = "data.mem"
 )(
   input  wire clk,
   output wire halt
