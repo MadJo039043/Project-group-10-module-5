@@ -1,15 +1,19 @@
 `timescale 1ns/1ps
 
-module cpu24 #(
+module cpu24 #( 
   parameter INSTR_AW  = 10,
-  parameter DATA_AW   = 12,
-  parameter INSTR_HEX = "program.hex",
-  parameter DATA_HEX  = "data.hex"
+  parameter DATA_AW   = 14,
+  parameter DataR=24,
+  parameter INSTR_HEX = "program.mem",
+  parameter DATA_HEX_X = "X_q_data.hex",
+  parameter DATA_HEX_W = "W_q_data.hex",
+  parameter DATA_HEX_B =  "b_q_data.hex"
 )(
   input  wire clk,
   output wire halt
 );
 
+//
   // ------------------------
   // Fetch / PC
   // ------------------------
@@ -75,7 +79,8 @@ module cpu24 #(
   // ------------------------
   wire [23:0] mem_data;
 
-  RAM24 #(.address_parameter(DATA_AW), .hexcode(DATA_HEX)) DMEM (
+  RAM24 #(.ADDRESS_WIDTH(DATA_AW),.DATA_WIDTH(DataR)
+  ,.X_hexcode(DATA_HEX_X), .W_hexcode(DATA_HEX_W),.B_hexcode(DATA_HEX_B)) DMEM (
     .clk     (clk),
     .we      (MemWrite),
     .addr    (alu_result[DATA_AW-1:0]),
@@ -101,7 +106,7 @@ module cpu24 #(
       Jump        ? pc_jump   :
       take_branch ? pc_branch :
                     pc_plus_1;
-
+                    
   // ------------------------
   // State updates (no reset)
   // ------------------------
@@ -115,5 +120,30 @@ module cpu24 #(
     pc = {INSTR_AW{1'b0}};
     for (i=0; i<64; i=i+1) R[i] = 24'd0;
   end
+
+//Multi-cycle registers
+reg [23:0] IR,A,B,S,M;
+
+//Enable from contoller/FSM 
+reg IRwe,Awe,Bwe,Swe,Mwe;
+
+//doing the register thing when the we's are active
+always @(posedge clk) begin
+if(IRwe) 
+IR <= instr;
+if(Awe)  
+A <= R[rs1];
+if(Bwe)
+B <= R[rs2];
+if(Swe)
+S <= ALUop ;
+if(Mwe)
+M <= mem_data;
+end
+
+//// In WRITEBACK state:
+//wire [5:0] dest = (isLI | isLOAD) ? rt : rd;
+//wire [23:0] wb  = MemToReg ? MDR : ALUOut;
+//always @(posedge clk) if (RegWrite) R[dest] <= wb;
 
 endmodule
