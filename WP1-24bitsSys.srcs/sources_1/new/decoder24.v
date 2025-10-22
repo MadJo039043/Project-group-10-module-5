@@ -28,46 +28,52 @@
 //   HALT=4'h0, ADD=4'h1, MUL=4'h3, LI=4'h4, LOAD=4'h5, STORE=4'h6, BEQ=4'h7, JMP=4'h8
 
 module decoder24(
-  input  [23:0] instr,
+  input  [23:0] instr,   // IR
   output [5:0]  rd, rs1, rs2,
-  output [23:0] imm8, off8, off20,
-  output    RegWrite,MemRead, MemWrite, MemToReg, ALUSrc,
-  output [1:0]  ALUop,       // 0=ADD, 1=MUL, 2==PASS, 3=ADDR_ADD
-  output        Branch, Jump, Halt
+  output [23:0] imm8, off8, off20
+//   output [3:0]  op    // instr[23:20]
+//  output    RegWrite,MemRead, MemWrite, MemToReg, ALUSrc,
+//  output [1:0]  ALUop,       // 0=ADD, 1=MUL, 2==PASS, 3=ADDR_ADD
+//  output        Branch, Jump, Halt
 );
-  wire [3:0] op = instr[23:20];
+//opcode
+//  assign op = instr[23:20];
+  
+    // R-type:  [19:14]=rs1 [13:8]=rs2 [7:2]=rd [1:0]=00
   assign rs1      = instr[19:14];
   assign rs2      = instr[13:8];
-  assign rd    = instr[7:2];
+  assign rd       = instr[7:2];
+  
+   // Sign extends
   assign imm8 = {{16{instr[7]}},  instr[7:0]}; //instr[24] is the sign bit of the 25-field, duplicate 1 7 times
   assign off8 = {{16{instr[7]}}, instr[7:0]};
   assign off20 = {{4{instr[19]}}, instr[19:0]};
-    reg rw, mr, mw, W_src, asrc, br, jmp, h;
-  reg [1:0] alu;
+//    reg rw, mr, mw, W_src, asrc, br, jmp, h;
+//  reg [1:0] alu;
 
-  always @(*)
-   begin
-    rw=0; mr=0; mw=0; W_src=0; asrc=0; br=0; jmp=0; h=0; alu=2'd0;
-    case (op)
-      4'h0: h   = 1'b1;                 // HALT
-      4'h1: begin rw=1; alu=2'd0; end   // ADD
-      4'h3: begin rw=1; alu=2'd1; end   // MUL
-      4'h4: begin rw=1; alu=2'd2; asrc=1; end // LI (pass imm)
-      4'h5: begin mr=1; rw=1; W_src=1; alu=2'd3; asrc=1; end // LOAD
-      4'h6: begin mw=1; alu=2'd3; asrc=1; end             // STORE
-      4'h7: br  = 1'b1;                 // BEQ
-      4'h8: jmp = 1'b1;                 // JMP
-      default: ;                        // NOP/unused
-    endcase
-  end
+//  always @(*)
+//   begin
+//    rw=0; mr=0; mw=0; W_src=0; asrc=0; br=0; jmp=0; h=0; alu=2'd0;
+//    case (op)
+//      4'h0: h   = 1'b1;                 // HALT
+//      4'h1: begin rw=1; alu=2'd0; end   // ADD
+//      4'h3: begin rw=1; alu=2'd1; end   // MUL
+//      4'h4: begin rw=1; alu=2'd2; asrc=1; end // LI (pass imm)
+//      4'h5: begin mr=1; rw=1; W_src=1; alu=2'd3; asrc=1; end // LOAD
+//      4'h6: begin mw=1; alu=2'd3; asrc=1; end             // STORE
+//      4'h7: br  = 1'b1;                 // BEQ
+//      4'h8: jmp = 1'b1;                 // JMP
+//      default: ;                        // NOP/unused
+//    endcase
+//  end
 
-  assign RegWrite = rw;
-  assign MemRead  = mr;
-  assign MemWrite = mw;
-  assign MemToReg = W_src;
-  assign ALUSrc   = asrc;
-  assign ALUop    = alu;
-  assign Branch   = br;
-  assign Jump     = jmp;
-  assign Halt     = h;
+//  assign RegWrite = rw;
+//  assign MemRead  = mr;
+//  assign MemWrite = mw;
+//  assign MemToReg = W_src;
+//  assign ALUSrc   = asrc;
+//  assign ALUop    = alu;
+//  assign Branch   = br;
+//  assign Jump     = jmp;
+//  assign Halt     = h;
 endmodule

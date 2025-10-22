@@ -1,7 +1,7 @@
 `timescale 1ns/1ps
 module instr_ROM24 #(
   parameter address_parameter = 10,     // 1024 words
-  parameter hexcode = "program.hex"
+  parameter hexcode = "program.mem"
 )(
   input                   clk,
   input  [address_parameter-1:0]     addr,    //10 bit address_parameter 
