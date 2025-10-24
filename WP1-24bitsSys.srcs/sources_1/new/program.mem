@@ -1,0 +1,33 @@
+900400 // LUI R4, 0x00        ; X_base = 0x0000
+A10400 // ORI R4, R4, 0x00
+900510 // LUI R5, 0x10        ; W_base = 0x1000
+A14500 // ORI R5, R5, 0x00
+90062E // LUI R6, 0x2E        ; B_base upper
+A186A0 // ORI R6, R6, 0xA0    ; B_base = 0x2EA0
+900730 // LUI R7, 0x30        ; Y_base upper
+A1C700 // ORI R7, R7, 0x00    ; Y_base = 0x3000
+400901 // LI R9, 1            ; one = 1
+400A0A // LI R10, 10          ; end10 = 10
+900B03 // LUI R11, 0x03       ; upper bits of 784
+A2CB10 // ORI R11, R11, 0x10  ; 784 = 0x0310
+100004 // ADD R1, R0, R0      ; i = 0
+118120 // ADD R8, R6, R1      ; tmp = B_base + i
+520300 // LOAD R3, [R8]       ; acc = b_q[i]
+304B20 // MUL R8, R1, R11     ; tmp = i * 784
+120520 // ADD R8, R8, R5      ; tmp += W_base
+100008 // ADD R2, R0, R0      ; j = 0
+120230 // ADD R12, R8, R2     ; tmp = W_row + j
+530C00 // LOAD R12, [R12]     ; W_q[i,j]
+110234 // ADD R13, R4, R2     ; tmp = X_base + j
+534D00 // LOAD R13, [R13]     ; X_q[j]
+330D38 // MUL R14, R12, R13   ; product
+10CE0C // ADD R3, R3, R14     ; acc += product
+108908 // ADD R2, R2, R9      ; j++
+708B10 // BEQ R2, R11, END_INNER
+800012 // JMP INNER_LOOP
+11C120 // ADD R8, R7, R1      ; tmp = Y_base + i
+620300 // STORE R3, [R8]      ; y_int[i] = acc
+104904 // ADD R1, R1, R9      ; i++
+704A20 // BEQ R1, R10, END_OUTER
+80000A // JMP OUTER_LOOP
+000000 // HALT
