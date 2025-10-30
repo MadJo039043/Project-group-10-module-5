@@ -3,8 +3,8 @@
 //BaudCount = [Clock_Frequency / (Baud_Rate*16)]-1  (Ideally clock frequency should be multiple of baurd_rate to avoid clock related glitches)
 
 module uart_receive #(
-    parameter CLK_FREQUENCY_HZ = 80_000_000,
-    parameter BAUD_RATE = 1_250_000    //1_562_500
+    parameter CLK_FREQUENCY_HZ = 50_000_000,
+    parameter BAUD_RATE = 781_250    //1_562_500
 )
 (
     input rst,

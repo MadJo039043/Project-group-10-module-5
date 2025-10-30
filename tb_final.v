@@ -4,16 +4,16 @@ module tb_full_system;
   // ======================================================
   // SIMULATION PARAMETERS
   // ======================================================
-  localparam CLK_FREQ   = 80_000_000;   // 100 MHz
-  localparam BAUD_RATE  = 500_000;
-  localparam CLK_PERIOD = 12.5;            // ns
+  localparam CLK_FREQ   = 50_000_000;   // 100 MHz
+  localparam BAUD_RATE  = 312_500;
+  localparam CLK_PERIOD = 20;            // ns
   localparam BIT_PERIOD = 1_000_000_000 / BAUD_RATE; // ~1600 ns per UART bit
 
   localparam X_FILE    = "X_q_data.mem";
   localparam PROG_FILE = "program.mem";
   localparam W_FILE    = "W_q_data.mem";
   localparam B_FILE    = "b_q_data.mem";
-  localparam integer NUM_PIXELS = 20;
+  localparam integer NUM_PIXELS = 785;
 
   // ======================================================
   // CLOCK AND RESET
@@ -27,13 +27,19 @@ module tb_full_system;
   // ======================================================
   // UART INTERFACE
   // ======================================================
-  reg rxd = 1;
-  wire txd;
-  wire [9:0] led;
+  reg rxd = 0;
+  //wire txd;
+  wire [14:0] led;
   wire receive_done;
-  wire send_done;
+  wire cpu_done = dut.cpu_inst.cpu_done;
+  reg [2:0] state;
+  reg [2:0] nstate;
+  reg R3_idx = dut.cpu_inst.R3_idx;
   wire [31:0] count_packets = dut.count_packets;
- 
+always @(posedge clk) begin
+  state <= dut.cpu_inst.state;
+  nstate <= dut.cpu_inst.nstate;
+end
   //wire [3:0] uart_cnt_4b;
   //assign uart_cnt_4b = dut.uart_tx_inst.cnt_4b;
   //wire [31:0] counter_baud;
@@ -51,7 +57,6 @@ module tb_full_system;
   ) dut (
     .clk(clk),
     .rxd(rxd),
-    .txd(txd),
     .led(led)
   );
 
@@ -59,7 +64,6 @@ module tb_full_system;
   assign send_done    = dut.send_done;
   
   cpu24multi #(
-        .INSTR_HEX (PROG_FILE),
         .DATA_HEX_W(W_FILE),
         .DATA_HEX_B(B_FILE)
       ) cpu_inst (
@@ -67,11 +71,11 @@ module tb_full_system;
         .rst(rst)
       );
       
-      wire halt     = dut.cpu_inst.halt;
+  wire halt     = dut.cpu_inst.halt;
   wire [9:0] pc = dut.cpu_inst.pc;
   wire [3:0] opcode = dut.cpu_inst.opcode;
-  wire [2:0] ALUop = dut.cpu_inst.ALUop;
-  wire [23:0] alu_result = dut.cpu_inst.alu_result;
+ /* wire [2:0] ALUop = dut.cpu_inst.ALUop;
+  wire [23:0] alu_result = dut.cpu_inst.alu_result;*/
   wire Notifier = dut.cpu_inst.Notifier;
   wire [3:0] nn_result = dut.nn_result;
   // ======================================================
@@ -92,7 +96,7 @@ wire [23:0] cpu_R3_snap_7  = dut.cpu_inst.R3_snapshot[7];
 wire [23:0] cpu_R3_snap_8  = dut.cpu_inst.R3_snapshot[8];
 wire [23:0] cpu_R3_snap_9  = dut.cpu_inst.R3_snapshot[9];
 
-    wire [13:0] ram_addr = top_module.ram_addr;
+ /*   wire [13:0] ram_addr = top_module.ram_addr;
     wire [23:0] ram_data_in = top_module.ram_data_in;
     wire [3:0] ram_we = top_module.ram_we;
     
@@ -101,7 +105,7 @@ wire [23:0] cpu_R3_snap_9  = dut.cpu_inst.R3_snapshot[9];
       wire [23:0] Y;
 assign A = dut.cpu_inst.ALU0.A;
 assign B = dut.cpu_inst.ALU0.B;
-assign Y = dut.cpu_inst.ALU0.Y;
+assign Y = dut.cpu_inst.ALU0.Y;*/
     wire [23:0] instr = dut.cpu_inst.instr;
 
 
@@ -185,15 +189,6 @@ assign Y = dut.cpu_inst.ALU0.Y;
   integer cycles = 0;
   reg notifier_prev = 0;
 
-  always @(posedge clk) begin
-    if (!rst) begin
-      cycles <= cycles + 1;
-      if (Notifier && !notifier_prev) begin
-        dump_registers();
-      end
-      notifier_prev <= Notifier;
-    end
-  end
 
   task dump_registers;
     integer i;
@@ -218,12 +213,5 @@ assign Y = dut.cpu_inst.ALU0.Y;
     $finish;
   end
   
-// Optionally report result at end of simulation
-initial begin
-    #80_500_000; // match your main simulation timeout
-    $finish;
-end
-
-
 
 endmodule

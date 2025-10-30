@@ -1,14 +1,13 @@
 `timescale 1ns/1ps
 
 module top_module #(
-    parameter FREQ = 80_000_000,
-    parameter BAUD = 500_000,
+    parameter FREQ = 50_000_000,
+    parameter BAUD = 312_500,
     parameter DATA_WIDTH = 24
 )(
     input wire clk,
     input wire rxd,
-    output wire txd,
-    output reg [13:0] led
+    output reg [14:0] led
 );
 
     // ------------------------
@@ -50,7 +49,7 @@ module top_module #(
     // ------------------------
     localparam PKT_HEADER = 3'b101;
     localparam delay_cnt = 32'd6400-1;
-    localparam PKT_EXPECTED = 32'd20;
+    localparam PKT_EXPECTED = 32'd784;
 
     localparam ST_IDLE  = 3'd0,
                ST_BYTE1 = 3'd1,
@@ -124,6 +123,7 @@ module top_module #(
             nn_delay_counter <= 16'd0;
             chk_receive_done <= 1'b0;
 
+
             /* UART TX FSM
             tx_state         <= 3'd0;
             tx_byte_sel      <= 2'd0;
@@ -137,6 +137,7 @@ module top_module #(
             for (i=0; i<10; i=i+1)
                 R3_array[i] <= 24'd0;
         end
+        else if(receive_done) chk_receive_done <= 1;
         else begin
             // Packet FSM
             (*parallel_case*)
@@ -258,7 +259,9 @@ module top_module #(
                     end 
                 end
             endcase */
-        end
+               
+        
+       end
     end
 
     // ------------------------
@@ -316,11 +319,12 @@ module top_module #(
     cpu24multi cpu_inst(
         .clk(clk),
         .rst(rst),
-        .chk_receive_done(chk_receive_done),
+        .receive_done(receive_done),
         .alu_result(),
         .ALUop(),
         .opcode(opcode),
         .pc(),
+        .count_packets(count_packets),
         .instr(instr),
         .data_out(),
         .Notifier(),
@@ -328,28 +332,11 @@ module top_module #(
         .mem_addr_ext(cpu_ram_addr),
         .mem_data_in_ext(cpu_ram_data_in),
         .mem_data_out_ext(cpu_ram_data_out),
-        .halt(halt)
+        .halt(halt),
+        .R3_idx(R3_idx)
     );
 
-    // ------------------------
-    // Process CPU snapshots
-    // ------------------------
-    always @(posedge clk) begin
-        if (halt) begin
-            for (i = 0; i < 10; i=i+1)
-                R3_array[i] <= cpu_inst.R3_snapshot[i];
 
-            max_val = R3_array[0];
-            max_idx = 0;
-            for (i = 1; i < 10; i=i+1) begin
-                if (R3_array[i] > max_val) begin
-                    max_val = R3_array[i];
-                    max_idx = i[3:0];
-                end
-            end
-            nn_result <= max_idx;
-        end
-    end
 
    
 // ------------------------
@@ -357,26 +344,10 @@ module top_module #(
 // ------------------------
 
 always @(posedge clk) begin
-  if(receive_done) chk_receive_done <= 1;
-  // Show packet FSM state
-  led[2:0] <= fsm_state;
-
-  // Show CPU FSM state (lower 3 bits)
-  led[5:3] <= cpu_inst.state;  
-
-  // Blink when CPU halts
-  led[6] <= halt;
-
-  // Flash when receive_done triggers
-  led[7] <= receive_done;
-
-  // Flash on memory write
-  led[8] <= cpu_inst.mem_we_ext;
-
-  // Show UART RX ready
-  led[9] <= rx_ready;
-  
-  led[13:10] <= nn_result;
+led[2:0] <= cpu_inst.state;
+led[9:3] <= count_packets;
+led[13:10] <= cpu_inst.max_idx;
+led[14]    <= chk_receive_done;
 end
 
 

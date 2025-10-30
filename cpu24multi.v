@@ -4,20 +4,21 @@ module cpu24multi #(
   parameter INSTR_AW   = 10,
   parameter DATA_AW    = 14,
   parameter DataR      = 24,
-  parameter INSTR_HEX  = "program.mem",
   parameter DATA_HEX_X = "X_q_data.mem",
   parameter DATA_HEX_W = "W_q_data.mem",
   parameter DATA_HEX_B = "b_q_data.mem"
 )(
   input  wire clk,
   input  wire rst,
-  input  wire chk_receive_done,
+  input  wire receive_done,
+  input  wire count_packets,
   
   // External memory interface
-  output wire        mem_we_ext,
+  output wire mem_we_ext,
   output wire [DATA_AW-1:0] mem_addr_ext,
   output wire [23:0] mem_data_in_ext,
   input  wire [23:0] mem_data_out_ext,
+
 
   // CPU datapath outputs
   output wire [23:0] alu_result,
@@ -27,15 +28,16 @@ module cpu24multi #(
   output wire [23:0] instr,
   output wire [23:0] data_out,
   output reg Notifier,
-  output reg halt
+  output reg halt,
+  output reg [3:0]nn_result,
+  output reg R3_idx
 );
 
   // ------------------------
   // Instruction ROM
   // ------------------------
   instr_ROM24 #(
-    .address_parameter(INSTR_AW),
-    .hexcode(INSTR_HEX)
+    .address_parameter(INSTR_AW)
   ) IROM (
     .clk(clk),
     .addr(pc),
@@ -57,6 +59,8 @@ module cpu24multi #(
   // ------------------------
   wire [5:0] rd, rs1, rs2;
   wire [23:0] imm8, off8, off20;
+  
+  reg cpu_done;
 
   decoder24 DEC (
     .instr(IR),
@@ -65,7 +69,8 @@ module cpu24multi #(
     .rs2(rs2),
     .imm8(imm8),
     .off8(off8),
-    .off20(off20)
+    .off20(off20),
+    .opcode(opcode)
   );
 
   // Immediate variants
@@ -73,7 +78,6 @@ module cpu24multi #(
   wire [23:0] imm8_zx  = {16'd0, IR[7:0]};
   wire [23:0] imm8_lui = {IR[7:0], 8'd0};
 
-  assign opcode = IR[23:20];
 
   // Effective rs2 for STORE
   wire [5:0] rs2_eff = (opcode == 4'h6) ? rd : rs2;
@@ -124,22 +128,29 @@ module cpu24multi #(
   reg IRwe, Awe, Bwe, ALUOutwe, MDRwe;
   reg RegWrite, MemRead, MemToReg;
 
+    reg [23:0] R3_snapshot [0:9];
+    reg [23:0] R3_array [0:9];
+    reg [3:0]  R3_idx;
+    reg notifier_d;
+    integer i;
+    reg [23:0] max_val;
+    reg [3:0] max_idx;
+
   // ------------------------
   // FSM combinational logic
   // ------------------------
   always @(*) begin
     // Defaults
-    nstate   = S_FETCH1;
     IRwe     = 0; Awe = 0; Bwe = 0; ALUOutwe = 0; MDRwe = 0;
     RegWrite = 0; MemRead = 0; MemWrite = 0; MemToReg = 0;
     PCWrite = 0; PCSrc = PC_PLUS1; ALUop = 3'd0; ALUSrc = 0;
+
 
     case (state)
   S_FETCH1: begin
     PCWrite = 1; 
     PCSrc   = PC_PLUS1; 
     nstate  = S_FETCH2; 
-    halt    = 0;
   end
 
   S_FETCH2: begin
@@ -169,7 +180,7 @@ module cpu24multi #(
       PCSrc=PC_JUMP; 
       nstate=S_FETCH1; 
     end
-    else if (opcode==4'h0) nstate=S_HALT; 
+    else if (opcode==4'h0) begin nstate=S_HALT; cpu_done=1;end
     else nstate = S_FETCH1;
   end
 
@@ -184,22 +195,12 @@ module cpu24multi #(
     nstate=S_FETCH1; 
   end
 
-  S_HALT: if(~chk_receive_done) begin nstate = S_FETCH1;
-   end else begin
-   nstate=S_HALT;
-   halt <= 1;
-   end
-  default: nstate = S_FETCH1;
+  S_HALT: begin 
+    if(receive_done && ~cpu_done) nstate = S_FETCH1;
+    else nstate = S_HALT;
+  end
 endcase
 
-  end
-
-  // ------------------------
-  // State register
-  // ------------------------
-  always @(posedge clk) begin
-    if (rst) state <= S_FETCH1;
-    else state <= nstate;
   end
 
     
@@ -208,8 +209,27 @@ endcase
   // ------------------------
   always @(posedge clk) begin
     if (rst) begin
-      pc <= 0; IR <= 0; A <= 0; B <= 0; ALUOut <= 0; MDR <= 0; halt <= 0;
+      pc <= 0; 
+      IR <= 0; 
+      A <= 0; 
+      B <= 0; 
+      ALUOut <= 0; 
+      MDR <= 0; 
+      halt <= 0;
+      state <= S_HALT;
+      cpu_done = 0;
+      Notifier <= 1'b0;
+      notifier_d <= 1'b0;
+      R3_idx <= 4'b0;
+      nn_result <= 4'd0;
+      max_idx <= 1'b0;
+      max_val <= 1'b0;
+        for (i = 0; i < 10; i=i+1) begin
+            R3_snapshot[i] <= 24'd0;
+            R3_array [i] <= 24'd0;
+        end
     end else begin
+      state <= nstate;
       if (IRwe) IR <= instr;
       if (Awe)  A  <= R[rs1];
       if (Bwe)  B  <= R[rs2_eff];
@@ -217,13 +237,48 @@ endcase
       if (MDRwe) MDR <= mem_data_out_ext;
       if (PCWrite) begin
         case (PCSrc)
-          PC_PLUS1:  if (chk_receive_done) pc <= pc + 1; 
+          PC_PLUS1:  if (~halt && ~rst) pc <= pc + 1; 
           PC_BRANCH: pc <= off8[INSTR_AW-1:0];
           PC_JUMP:   pc <= off20[INSTR_AW-1:0];
         endcase
       end
+      Notifier <= (opcode == 6);
+        notifier_d <= Notifier;
+
+        // Capture R[3] on rising edge of Notifier
+        if (Notifier && ~notifier_d && R3_idx < 10) begin
+            R3_snapshot[R3_idx] <= R[3];
+            R3_idx <= R3_idx + 1;
+        end
+
+        // Compute nn_result once all snapshots are captured
+        if (R3_idx == 10) begin
+            // Copy snapshot array to temporary array
+            for (i = 0; i < 10; i=i+1)
+                R3_array[i] = R3_snapshot[i];
+
+            // Find max value and its index
+            max_val = R3_array[0];
+            max_idx = 0;
+            for (i = 1; i < 10; i=i+1) begin
+                if (R3_array[i] > max_val) begin
+                    max_val = R3_array[i];
+                    max_idx = i[3:0];
+                end
+         end
+    end
     end
   end
+  
+always @(posedge clk or posedge rst) begin
+  if (rst)
+    halt <= 1'b0;
+  else if (state == S_HALT)
+    halt <= 1'b1;  // latch halt
+  else if (receive_done)
+    halt <= 1'b0;  // optionally clear when new packet ready
+end
+
 
   // ------------------------
   // Write-back
@@ -241,33 +296,6 @@ endcase
     end
   end
 
-  // ------------------------
-  // Halt and notifier
-  // ------------------------
-  // Notifier logic (driven by CPU opcode)
-always @(posedge clk or posedge rst) begin
-    if (rst)
-        Notifier <= 1'b0;
-    else
-        Notifier <= (opcode == 6);
-end
 
-// ------------------------
-// R3 snapshot array
-// ------------------------
-reg [23:0] R3_snapshot [0:9];
-reg [3:0]  R3_idx;
-integer j;
-
-always @(posedge Notifier or posedge rst) begin
-    if (rst) begin
-        for (j = 0; j < 10; j = j + 1)
-            R3_snapshot[j] <= 24'd0;
-        R3_idx <= 0;
-    end else if (R3_idx < 10) begin
-        R3_snapshot[R3_idx] <= R[3];
-        R3_idx <= R3_idx + 1;
-    end
-end
 
 endmodule
