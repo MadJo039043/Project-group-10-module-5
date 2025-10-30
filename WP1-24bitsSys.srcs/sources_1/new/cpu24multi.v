@@ -1,293 +1,281 @@
 `timescale 1ns/1ps
 
 module cpu24multi #( 
-  parameter INSTR_AW  = 10,
-  parameter DATA_AW   = 14,
-  parameter DataR     = 24,
-  parameter INSTR_HEX = "program.mem",
-  parameter DATA_HEX_X = "X_q_data.hex",
-  parameter DATA_HEX_W = "W_q_data.hex",
-  parameter DATA_HEX_B = "b_q_data.hex"
+  parameter INSTR_AW   = 10,
+  parameter DATA_AW    = 14,
+  parameter DataR      = 24,
+  parameter INSTR_HEX  = "program.mem",
+  parameter DATA_HEX_X = "X_q_data.mem",
+  parameter DATA_HEX_W = "W_q_data.mem",
+  parameter DATA_HEX_B = "b_q_data.mem"
 )(
   input  wire clk,
-  output wire halt
+  input  wire rst,
+  input  wire chk_receive_done,
+  
+  // External memory interface
+  output wire        mem_we_ext,
+  output wire [DATA_AW-1:0] mem_addr_ext,
+  output wire [23:0] mem_data_in_ext,
+  input  wire [23:0] mem_data_out_ext,
+
+  // CPU datapath outputs
+  output wire [23:0] alu_result,
+  output reg  [2:0]  ALUop,
+  output wire [3:0]  opcode,
+  output reg  [INSTR_AW-1:0] pc,
+  output wire [23:0] instr,
+  output wire [23:0] data_out,
+  output reg Notifier,
+  output reg halt
 );
 
   // ------------------------
-  // Program Counter / Fetch
+  // Instruction ROM
   // ------------------------
-  reg  [INSTR_AW-1:0] pc;
-  wire [23:0]         instr;
-
-  // 24-bit instruction ROM (word-addressed)
-  instr_ROM24 #(.address_parameter(INSTR_AW), .hexcode(INSTR_HEX)) IROM (
-    .clk  (clk),
-    .addr (pc),
+  instr_ROM24 #(
+    .address_parameter(INSTR_AW),
+    .hexcode(INSTR_HEX)
+  ) IROM (
+    .clk(clk),
+    .addr(pc),
     .instr(instr)
   );
 
   // ------------------------
-  // Architectural register file (64 x 24)
+  // Register File
   // ------------------------
-  reg  [23:0] R [0:63];
+  reg signed [23:0] R [0:63];
 
   // ------------------------
-  // Micro-architectural holding regs (multi-cycle)
+  // Internal holding registers
   // ------------------------
   reg [23:0] IR, A, B, ALUOut, MDR;
 
   // ------------------------
-  // Decode fields (from IR)
+  // Decode fields
   // ------------------------
   wire [5:0] rd, rs1, rs2;
   wire [23:0] imm8, off8, off20;
-  
-  // Immediate variants (built from IR)
-wire [23:0] imm8_se  = imm8;                 // sign-extended (from decoder)
-wire [23:0] imm8_zx  = {16'd0,  IR[7:0]};    // zero-extended (ORI)
-wire [23:0] imm8_lui = {        IR[7:0],16'd0}; // shift-left 16 (LUI)
-  // Opcode from IR
-  wire [3:0] opcode = IR[23:20];
 
-  // Instr-class helpers
-  wire is_HALT  = (opcode == 4'h0);
-  wire is_ADD   = (opcode == 4'h1);
-  wire is_MUL   = (opcode == 4'h3);
-  wire is_LI    = (opcode == 4'h4);
-  wire is_LOAD  = (opcode == 4'h5);
-  wire is_STORE = (opcode == 4'h6);
-  wire is_BEQ   = (opcode == 4'h7);
-  wire is_JMP   = (opcode == 4'h8);
-  wire is_LUI   = (opcode == 4'h9);
-  wire is_ORI   = (opcode == 4'hA); //10
-  
-  // Pick the right immediate for this instruction
-wire [23:0] alu_b_imm =
-    is_LI  ? imm8_se  :
-    is_LUI ? imm8_lui :
-    is_ORI ? imm8_zx  :
-             off8;    
-
-
-  // NOTE: we only use field extraction from decoder24; control comes from FSM.
   decoder24 DEC (
     .instr(IR),
-    .rd (rd),  .rs1(rs1),  .rs2(rs2),
-    .imm8 (imm8), .off8(off8), .off20(off20)
+    .rd(rd),
+    .rs1(rs1),
+    .rs2(rs2),
+    .imm8(imm8),
+    .off8(off8),
+    .off20(off20)
   );
 
-  // STORE quirk: data reg is 'rd' field
-  wire [5:0] rs2_eff = (IR[23:20] == 4'h6) ? rd : rs2;
+  // Immediate variants
+  wire [23:0] imm8_se  = imm8;
+  wire [23:0] imm8_zx  = {16'd0, IR[7:0]};
+  wire [23:0] imm8_lui = {IR[7:0], 8'd0};
+
+  assign opcode = IR[23:20];
+
+  // Effective rs2 for STORE
+  wire [5:0] rs2_eff = (opcode == 4'h6) ? rd : rs2;
 
   // ------------------------
-  // ALU (driven from A/B and imm/off under FSM)
-  // ALUop codes (same as your single-cycle): 0=ADD, 1=MUL, 2=PASS_B, 3=ADDR_ADD
+  // ALU
   // ------------------------
-  reg  [2:0] ALUop;        // from FSM
-  reg        ALUSrc;       // 0: use B, 1: use imm/off
-  // Final B input to ALU
-wire [23:0] alu_b_mux = ALUSrc ? alu_b_imm : B;
-  wire [23:0] alu_result;
-  wire        aluZ;
+  reg ALUSrc;  // 0: B, 1: imm/off
+  wire [23:0] alu_b_mux = ALUSrc ? (
+    (opcode==4'h4) ? imm8_se :   // LI
+    (opcode==4'h9) ? imm8_lui :  // LUI
+    (opcode==4'hA || opcode==4'hC) ? imm8_zx :   // ORI
+    off8
+  ) : B;
 
+  wire aluZ;
   ALU24 ALU0 (
-    .A    (A),
-    .B    (alu_b_mux),
+    .A(A),
+    .B(alu_b_mux),
     .ALUop(ALUop),
-    .Y    (alu_result),
-    .Z    (aluZ)
+    .Y(alu_result),
+    .Z(aluZ)
   );
 
-  // ------------------------
-  // Data memory (word-addressed, 24-bit words)
-  // ------------------------
-  wire [23:0] mem_data;
-    // Reg/Memory control
-  reg IRwe, Awe, Bwe, ALUOutwe, MDRwe;
-  reg RegWrite, MemRead, MemToReg ,MemWrite;
-
-  RAM24 #(
-    .ADDRESS_WIDTH(DATA_AW),
-    .DATA_WIDTH   (DataR),
-    .X_hexcode    (DATA_HEX_X),
-    .W_hexcode    (DATA_HEX_W),
-    .B_hexcode    (DATA_HEX_B)
-  ) DMEM (
-    .clk     (clk),
-    .we      (MemWrite),
-    .addr    (ALUOut[DATA_AW-1:0]),   // address came from A+off8 -> ALUOut
-    .data_in (B),                      // STORE writes 'B'
-    .data_out(mem_data)
-  );
+  reg MemWrite;
 
   // ------------------------
-  // Multi-cycle controller (FSM)
+  // External/shared RAM interface
   // ------------------------
+  assign mem_we_ext       = MemWrite;                        
+  assign mem_addr_ext     = ALUOut[DATA_AW-1:0];     
+  assign mem_data_in_ext  = B;                               
+  assign data_out         = mem_data_out_ext;
 
-  // States
-  localparam S_FETCH=3'd0, S_DEC=3'd1, S_EXEC=3'd2, S_MEM=3'd3, S_WB=3'd4, S_HALT=3'd5;
+  // ------------------------
+  // CPU FSM
+  // ------------------------
+  localparam S_FETCH1=3'd0, S_FETCH2=3'd1, S_DEC=3'd2, S_EXEC=3'd3,
+             S_MEM=3'd4, S_WB=3'd5, S_HALT=3'd6;
+
   reg [2:0] state, nstate;
 
-  // PC control
   localparam PC_PLUS1 = 2'd0, PC_BRANCH = 2'd1, PC_JUMP = 2'd2;
-  reg       PCWrite;
+  reg PCWrite;
   reg [1:0] PCSrc;
 
-  // FSM: next-state & control decode
+  // Control signals
+  reg IRwe, Awe, Bwe, ALUOutwe, MDRwe;
+  reg RegWrite, MemRead, MemToReg;
+
+  // ------------------------
+  // FSM combinational logic
+  // ------------------------
   always @(*) begin
-    // defaults (deassert everything)
-    nstate   = S_FETCH;
-
-    IRwe     = 1'b0;
-    Awe      = 1'b0;
-    Bwe      = 1'b0;
-    ALUOutwe = 1'b0;
-    MDRwe    = 1'b0;
-
-    RegWrite = 1'b0;
-    MemRead  = 1'b0;
-    MemWrite = 1'b0;
-    MemToReg = 1'b0;
-
-    PCWrite  = 1'b0;
-    PCSrc    = PC_PLUS1;
-
-    ALUop    = 3'd0;
-    ALUSrc   = 1'b0;
+    // Defaults
+    nstate   = S_FETCH1;
+    IRwe     = 0; Awe = 0; Bwe = 0; ALUOutwe = 0; MDRwe = 0;
+    RegWrite = 0; MemRead = 0; MemWrite = 0; MemToReg = 0;
+    PCWrite = 0; PCSrc = PC_PLUS1; ALUop = 3'd0; ALUSrc = 0;
 
     case (state)
-      // S0: FETCH - IR <= IMEM[PC]; PC <= PC+1
-      S_FETCH: begin
-        IRwe    = 1'b1;
-        PCWrite = 1'b1;
-        PCSrc   = PC_PLUS1;
-        nstate  = S_DEC;
-      end
-
-      // S1: DECODE/REG READ - A<=R[rs1], B<=R[rs2_eff]
-      S_DEC: begin
-        Awe     = 1'b1;
-        Bwe     = 1'b1;
-        nstate  = S_EXEC;
-      end
-
-      // S2: EXEC - ALU/branch/jump/address calc
-      S_EXEC: begin
-        if (is_LI) begin
-          ALUop    = 3'b010;   // PASS_B
-          ALUSrc   = 1'b1;   // use imm8
-          ALUOutwe = 1'b1;
-          nstate   = S_WB;
-        end else if (is_ADD) begin
-          ALUop    = 3'b000;   // ADD
-          ALUSrc   = 1'b0;   // use B
-          ALUOutwe = 1'b1;
-          nstate   = S_WB;
-        end else if (is_MUL) begin
-          ALUop    = 3'b001;   // MUL
-          ALUSrc   = 1'b0;
-          ALUOutwe = 1'b1;
-          nstate   = S_WB;
-        end else if (is_LOAD || is_STORE) begin
-          ALUop    = 3'b011;   // address add (same as ADD)
-          ALUSrc   = 1'b1;   // use off8
-          ALUOutwe = 1'b1;   // latch address into ALUOut
-          nstate   = S_MEM;
-          end else if (is_LUI)begin
-        ALUop  =  3'b101;
-        ALUSrc =  1'b1; 
-        ALUOutwe = 1'b1;
-        nstate = S_WB;
-        end else if (is_ORI) begin
-        ALUop = 3'b100;
-        ALUSrc   = 1'b1;  
-        ALUOutwe = 1'b1;
-        nstate   = S_WB;
-        end else if (is_BEQ) begin
-          if (A == B) begin
-            PCWrite = 1'b1;
-            PCSrc   = PC_BRANCH;
-          end
-          nstate = S_FETCH;
-        end else if (is_JMP) begin
-          PCWrite = 1'b1;
-          PCSrc   = PC_JUMP;
-          nstate  = S_FETCH;
-        end else if (is_HALT) begin
-          nstate  = S_HALT;
-        end else begin
-          nstate  = S_FETCH; // treat unknown as NOP
-        end
-      end
-
-      // S3: MEM - LOAD: read -> MDR; STORE: write
-      S_MEM: begin
-        if (is_LOAD) begin
-          MemRead  = 1'b1;   // (informational; RAM is synchronous)
-          MDRwe    = 1'b1;   // capture mem_data
-          nstate   = S_WB;
-        end else begin
-          MemWrite = 1'b1;   // write B to DMEM[ALUOut]
-          nstate   = S_FETCH;
-        end
-      end
-
-      // S4: WB - write back to register file
-      S_WB: begin
-        RegWrite = 1'b1;
-        MemToReg = is_LOAD;  // LOAD uses MDR; others use ALUOut
-        nstate   = S_FETCH;
-      end
-
-      // S_HALT: hold
-      S_HALT: begin
-        nstate = S_HALT;
-      end
-    endcase
+  S_FETCH1: begin
+    PCWrite = 1; 
+    PCSrc   = PC_PLUS1; 
+    nstate  = S_FETCH2; 
+    halt    = 0;
   end
 
+  S_FETCH2: begin
+    IRwe   = 1; 
+    nstate = S_DEC; 
+  end
+
+  S_DEC: begin
+    Awe   = 1; 
+    Bwe   = 1; 
+    nstate = S_EXEC; 
+  end
+
+  S_EXEC: begin
+    if      (opcode==4'h4) begin ALUop=3'b010; ALUSrc=1; ALUOutwe=1; nstate=S_WB; end
+    else if (opcode==4'h1) begin ALUop=3'b000; ALUSrc=0; ALUOutwe=1; nstate=S_WB; end
+    else if (opcode==4'h3) begin ALUop=3'b001; ALUSrc=0; ALUOutwe=1; nstate=S_WB; end
+    else if (opcode==4'h5 || opcode==4'h6) begin ALUop=3'b011; ALUSrc=1; ALUOutwe=1; nstate=S_MEM; end
+    else if (opcode==4'h9) begin ALUop=3'b101; ALUSrc=1; ALUOutwe=1; nstate=S_WB; end
+    else if (opcode==4'hA) begin ALUop=3'b100; ALUSrc=1; ALUOutwe=1; nstate=S_WB; end
+    else if (opcode==4'hB) begin ALUop= 3'b001; ALUSrc = 1'b0;  ALUOutwe = 1'b1;  nstate= S_WB; end
+    else if (opcode==4'hC) begin ALUop = 3'b110; ALUSrc = 1'b1;ALUOutwe = 1'b1; nstate   = S_WB;end
+    else if (opcode==4'hD) begin if (A < B) begin PCWrite = 1'b1;PCSrc = PC_BRANCH; end nstate = S_FETCH1; end
+
+    else if (opcode==4'h7) begin 
+      if (A==B) begin PCWrite=1; PCSrc=PC_BRANCH; end
+      nstate = S_FETCH1; 
+    end
+    else if (opcode==4'h8) begin 
+      PCWrite=1; 
+      PCSrc=PC_JUMP; 
+      nstate=S_FETCH1; 
+    end
+    else if (opcode==4'h0) nstate=S_HALT; 
+    else nstate = S_FETCH1;
+  end
+
+  S_MEM: begin
+    if (opcode==4'h5) begin MemRead=1; MDRwe=1; nstate=S_WB; end
+    else begin MemWrite=1; nstate=S_FETCH1; end
+  end
+
+  S_WB: begin
+    RegWrite=1; 
+    MemToReg=(opcode==4'h5); 
+    nstate=S_FETCH1; 
+  end
+
+  S_HALT: if(~chk_receive_done) begin nstate = S_FETCH1;
+   end else begin
+   nstate=S_HALT;
+   halt <= 1;
+   end
+  default: nstate = S_FETCH1;
+endcase
+
+  end
+
+  // ------------------------
   // State register
-  initial state = S_FETCH;
-  always @(posedge clk) state <= nstate;
-
   // ------------------------
-  // Datapath updates (clocked)
-  // ------------------------
-
-  // IR/A/B/ALUOut/MDR latches
   always @(posedge clk) begin
-    if (IRwe)     IR     <= instr;                 // IMEM → IR
-    if (Awe)      A      <= R[rs1];                // R[rs1] → A
-    if (Bwe)      B      <= R[rs2_eff];            // R[rs2 or rd] → B
-    if (ALUOutwe) ALUOut <= alu_result;            // ALU → ALUOut
-    if (MDRwe)    MDR    <= mem_data;              // DMEM → MDR
+    if (rst) state <= S_FETCH1;
+    else state <= nstate;
+  end
 
-    // PC update
-    if (PCWrite) begin
-      case (PCSrc)
-        PC_PLUS1:  pc <= pc + 1'b1;
-        PC_BRANCH: pc <= pc + off8 [INSTR_AW-1:0];
-        PC_JUMP:   pc <= pc + off20[INSTR_AW-1:0];
-        default: ;
-      endcase
+    
+  // ------------------------
+  // Latches and PC update
+  // ------------------------
+  always @(posedge clk) begin
+    if (rst) begin
+      pc <= 0; IR <= 0; A <= 0; B <= 0; ALUOut <= 0; MDR <= 0; halt <= 0;
+    end else begin
+      if (IRwe) IR <= instr;
+      if (Awe)  A  <= R[rs1];
+      if (Bwe)  B  <= R[rs2_eff];
+      if (ALUOutwe) ALUOut <= alu_result;
+      if (MDRwe) MDR <= mem_data_out_ext;
+      if (PCWrite) begin
+        case (PCSrc)
+          PC_PLUS1:  if (chk_receive_done) pc <= pc + 1; 
+          PC_BRANCH: pc <= off8[INSTR_AW-1:0];
+          PC_JUMP:   pc <= off20[INSTR_AW-1:0];
+        endcase
+      end
     end
   end
 
-  // Write-back (uses dest rule: LI/LOAD write rt; R-type write rd)
-  wire [5:0] dest = ( is_ORI || is_LUI || is_LI || is_LOAD) ? rs2 : rd;
-  wire [23:0] wb  = MemToReg ? MDR : ALUOut;
-
-  always @(posedge clk) if (RegWrite) R[dest] <= wb;
-
   // ------------------------
-  // Halt output and init
+  // Write-back
   // ------------------------
-  assign halt = (state == S_HALT);
+  wire [5:0] dest = (opcode==4'h4 || opcode==4'h5 || opcode==4'h9 || opcode==4'hA || opcode==4'hC) ? rs2 : rd;
+ // Base value to write (from ALU or memory)
+wire [23:0] wb_base = MemToReg ? MDR : ALUOut;
+
+// For MAC: accumulate into destination register
+wire [23:0] wb = opcode==4'hB ? (R[dest] + wb_base) : wb_base;
 
   integer i;
-  initial begin
-    pc = {INSTR_AW{1'b0}};
-    for (i=0; i<64; i=i+1) R[i] = 24'd0;
+  always @(posedge clk) begin
+    if (rst) begin
+      for (i=0;i<64;i=i+1) R[i] <= 24'd0;
+    end else begin
+      if (RegWrite && dest != 6'd0) R[dest] <= wb;
+      R[0] <= 24'd0;
+    end
   end
+
+  // ------------------------
+  // Halt and notifier
+  // ------------------------
+  // Notifier logic (driven by CPU opcode)
+always @(posedge clk or posedge rst) begin
+    if (rst)
+        Notifier <= 1'b0;
+    else
+        Notifier <= (opcode == 6);
+end
+
+// ------------------------
+// R3 snapshot array
+// ------------------------
+reg [23:0] R3_snapshot [0:9];
+reg [3:0]  R3_idx;
+integer j;
+
+always @(posedge Notifier or posedge rst) begin
+    if (rst) begin
+        for (j = 0; j < 10; j = j + 1)
+            R3_snapshot[j] <= 24'd0;
+        R3_idx <= 0;
+    end else if (R3_idx < 10) begin
+        R3_snapshot[R3_idx] <= R[3];
+        R3_idx <= R3_idx + 1;
+    end
+end
 
 endmodule
