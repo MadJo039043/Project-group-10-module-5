@@ -1,5 +1,5 @@
 ;=======================================================================
-; 2-LAYER MNIST INFERENCE (784 → 256 → 10) - OPTIMIZED WITH MAC
+; 2-LAYER MNIST INFERENCE (784 → 64 → 10) - OPTIMIZED WITH MAC
 ; Integer-only version — uses MAC instruction for faster computation
 ;=======================================================================
 ; Layer 1: H = ReLU(W1 * X + b1)
@@ -30,12 +30,12 @@
 ; MEMORY MAP (all int32, no overlap)
 ;=======================================================================
 ; 0x00000 : X   (784 × int32)
-; 0x01000 : W1  (256×784 × int32)
-; 0x32000 : b1  (256 × int32)
-; 0x32400 : H   (256 × int32)
-; 0x32800 : W2  (10×256 × int32)
-; 0x32E00 : b2  (10 × int32)
-; 0x33000 : Y   (10 × int32)
+; 0x01000 : W1  (64×784 × int32) = 50,176 values → ends at 0x0D400
+; 0x0D400 : b1  (64 × int32)
+; 0x0D440 : H   (64 × int32)
+; 0x0D480 : W2  (10×64 × int32) = 640 values → ends at 0x0D6C0
+; 0x0D6C0 : b2  (10 × int32)
+; 0x0D6D0 : Y   (10 × int32)
 ;=======================================================================
 
 ;=======================================================================
@@ -48,9 +48,8 @@ ORI  R15, R0, 4           ; word size = 4
 LUI  R11, 0x03
 ORI  R11, R11, 0x10
 
-; out_dim (layer1) = 256 (0x0100)
-LUI  R10, 0x01
-ORI  R10, R10, 0x00
+; out_dim (layer1) = 64 (0x0040)
+ORI  R10, R0, 0x40
 
 ;=======================================================================
 ; === LAYER 1 ===  (Input X → Hidden H)
@@ -61,10 +60,10 @@ LUI  R4, 0x00             ; X_base = 0x00000
 ORI  R4, R4, 0x00
 LUI  R5, 0x01             ; W1_base = 0x01000
 ORI  R5, R5, 0x00
-LUI  R6, 0x32             ; B1_base = 0x32000
-ORI  R6, R6, 0x00
-LUI  R7, 0x32             ; H_base = 0x32400
-ORI  R7, R7, 0x40
+LUI  R6, 0x0D             ; B1_base = 0x0D400
+ORI  R6, R6, 0x40
+LUI  R7, 0x0D             ; H_base = 0x0D440
+ORI  R7, R7, 0x44
 
 ; i = 0
 ADD  R1, R0, R0
@@ -134,19 +133,18 @@ END_OUTER1:
 ;=======================================================================
 
 ; Reset loop dimensions
-LUI  R11, 0x01            ; in_dim = 256 (0x0100)
-ORI  R11, R11, 0x00
+ORI  R11, R0, 64           ; in_dim = 64 (0x40)
 ORI  R10, R0, 10           ; out_dim = 10
 
 ; Base address setup
-LUI  R4, 0x32             ; X_base = H_base = 0x32400
-ORI  R4, R4, 0x40
-LUI  R5, 0x32             ; W2_base = 0x32800
-ORI  R5, R5, 0x80
-LUI  R6, 0x32             ; B2_base = 0x32E00
-ORI  R6, R6, 0xE0
-LUI  R7, 0x33             ; Y_base = 0x33000
-ORI  R7, R7, 0x00
+LUI  R4, 0x0D             ; X_base = H_base = 0x0D440
+ORI  R4, R4, 0x44
+LUI  R5, 0x0D             ; W2_base = 0x0D480
+ORI  R5, R5, 0x48
+LUI  R6, 0x0D             ; B2_base = 0x0D6C0
+ORI  R6, R6, 0x6C
+LUI  R7, 0x0D             ; Y_base = 0x0D6D0
+ORI  R7, R7, 0x6D
 
 ; i = 0
 ADD  R1,  R0, R0
